@@ -695,17 +695,17 @@ export async function finalizeExpiredLots() {
       const winningBid = getBidById(currentState.bid_id);
 
       if (winningBid) {
+        markWinnerNotified({
+          auctionId: lot.auction_id,
+          lotNumber: lot.lot_number
+        });
+
         await safeReply({
           postId: lot.post_id,
           commentId: winningBid.comment_id,
           replyText: buildWinnerReply({
             lot: lot.lot_number
           })
-        });
-
-        markWinnerNotified({
-          auctionId: lot.auction_id,
-          lotNumber: lot.lot_number
         });
       }
     }

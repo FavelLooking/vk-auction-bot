@@ -1,6 +1,10 @@
 import dotenv from 'dotenv';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-dotenv.config();
+const appRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+
+dotenv.config({ path: join(appRoot, '.env') });
 
 const REQUIRED_ENV_VARS = [
   'VK_USER_TOKEN',

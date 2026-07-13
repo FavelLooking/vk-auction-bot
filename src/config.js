@@ -1,6 +1,18 @@
 import dotenv from 'dotenv';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-dotenv.config();
+const appRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+
+dotenv.config({ path: join(appRoot, '.env') });
+
+function resolveConfigPath(value) {
+  if (!value) {
+    return value;
+  }
+
+  return isAbsolute(value) ? value : resolve(appRoot, value);
+}
 
 function required(name) {
   const value = process.env[name];
@@ -26,7 +38,8 @@ export const config = {
   useLmStudio: String(process.env.USE_LM_STUDIO || 'false') === 'true',
   lmStudioBaseUrl: process.env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234/v1',
   lmStudioModel: process.env.LM_STUDIO_MODEL || 'qwen/qwen3-8b',
-  sqlitePath: process.env.SQLITE_PATH || './auction.db',
+  sqlitePath: resolveConfigPath(process.env.SQLITE_PATH || './auction.db'),
+  sqliteBackupDir: resolveConfigPath(process.env.SQLITE_BACKUP_DIR) || join(dirname(resolveConfigPath(process.env.SQLITE_PATH || './auction.db')), 'backups'),
   minBidStep: Number(process.env.MIN_BID_STEP || 50),
   allowEqualBid: String(process.env.ALLOW_EQUAL_BID || 'false') === 'true',
   dryRun: String(process.env.DRY_RUN || 'false') === 'true',

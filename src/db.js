@@ -1,8 +1,10 @@
 import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { config } from './config.js';
 import { logger } from './logger.js';
+
+mkdirSync(dirname(config.sqlitePath), { recursive: true });
 
 export const db = new Database(config.sqlitePath);
 
@@ -52,7 +54,7 @@ function getBackupTimestamp() {
 function getBackupPath() {
   const ext = extname(config.sqlitePath);
   const base = basename(config.sqlitePath, ext) || 'auction';
-  const backupDir = join(process.cwd(), 'backups');
+  const backupDir = config.sqliteBackupDir;
 
   mkdirSync(backupDir, { recursive: true });
 
@@ -411,6 +413,8 @@ export function updateLotState({
       ends_at = excluded.ends_at,
       is_closed = excluded.is_closed,
       updated_at = CURRENT_TIMESTAMP
+    WHERE lot_state.is_closed = 0
+       OR excluded.is_closed = 1
   `).run(
     auctionId,
     lotNumber,

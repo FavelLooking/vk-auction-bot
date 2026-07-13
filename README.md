@@ -38,6 +38,7 @@ Recommended production settings:
 
 ```env
 TZ=Europe/Moscow
+SQLITE_BACKUP_DIR=
 HS_API_BASE_URL=https://broadcast.vkforms.ru/api/v2
 HS_TIMEOUT_MS=10000
 POLL_INTERVAL_MS=15000
@@ -96,6 +97,26 @@ pm2 start npm --name vk-auction-bot -- run start
 pm2 save
 pm2 startup
 ```
+
+Recommended VPS layout:
+
+```text
+/opt/bots/vk-auction-bot/
+  app/
+  data/
+```
+
+Run the application with:
+
+```text
+WorkingDirectory=/opt/bots/vk-auction-bot/app
+SQLITE_PATH=/opt/bots/vk-auction-bot/data/auction.db
+```
+
+Filesystem paths are resolved from configuration. `SQLITE_PATH` may be absolute
+or relative to the application directory. `SQLITE_BACKUP_DIR` is optional; if it
+is not set, migration backups are written to a `backups/` directory next to the
+configured SQLite database file.
 
 Useful checks:
 
@@ -161,8 +182,11 @@ auction.db-shm
 4. Start the VPS bot.
 5. Keep the local bot stopped.
 
-The bot creates a timestamped SQLite backup in `backups/` before startup schema
-migrations, but only when a migration is actually required.
+The bot creates a timestamped SQLite backup before startup schema migrations,
+but only when a migration is actually required. By default backups are written
+next to the configured SQLite database file, for example
+`/opt/bots/vk-auction-bot/data/backups/` when `SQLITE_PATH` points to
+`/opt/bots/vk-auction-bot/data/auction.db`.
 
 ## Deployment Notes
 
