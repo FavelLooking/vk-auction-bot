@@ -1,0 +1,8 @@
+node_modules/
+.env
+auction.db
+auction.db-wal
+auction.db-shm
+backups/
+logs/
+*.log
