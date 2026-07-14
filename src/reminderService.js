@@ -39,14 +39,6 @@ function getFirstPhotoAttachment(post) {
   return `photo${photo.owner_id}_${photo.id}`;
 }
 
-function getPhotoAttachments(post) {
-  return (post.attachments || [])
-    .filter((attachment) => attachment.type === 'photo')
-    .map((attachment) => attachment.photo)
-    .filter((photo) => photo?.owner_id && photo?.id)
-    .map((photo) => `photo${photo.owner_id}_${photo.id}`);
-}
-
 function buildReminderSummary(summaryRows) {
   return summaryRows
     .map((row) => {
@@ -220,9 +212,9 @@ function findNewAuctionPost({ auctionPosts, endingPost }) {
 
 function buildHappySantaAttachments({ endingPost, newPost }) {
   return [
-    ...(endingPost ? getPhotoAttachments(endingPost) : []),
-    ...(newPost ? getPhotoAttachments(newPost) : [])
-  ];
+    endingPost ? getFirstPhotoAttachment(endingPost) : null,
+    newPost ? getFirstPhotoAttachment(newPost) : null
+  ].filter(Boolean);
 }
 
 export async function sendHappySantaReminderForAuction({
