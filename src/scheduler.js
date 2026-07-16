@@ -8,6 +8,7 @@ import {
   getMoscowDateKey
 } from './auctionTime.js';
 import { getAuctionByGroupPost, getCurrentSummary } from './db.js';
+import { filterSingleAuctionSummaryRows } from './singleAuctionParser.js';
 import {
   processAuctionComments,
   printCurrentSummary,
@@ -44,7 +45,9 @@ async function processSinglePost(post) {
     comments
   });
 
-  printCurrentSummary(post.id, post.date);
+  printCurrentSummary(post.id, post.date, {
+    isSingleAuction: isSingleAuctionPost(post)
+  });
 }
 
 export async function tick() {
@@ -81,9 +84,15 @@ export async function tick() {
     }
 
     if (!config.rebuildMode) {
-      await finalizeExpiredLots();
+      await finalizeExpiredLots({
+        singleAuctionPostIds: new Set(
+          auctionPosts
+            .filter((post) => isSingleAuctionPost(post))
+            .map((post) => post.id)
+        )
+      });
       try {
-        await cleanupFinishedAuctionReminders();
+        await cleanupFinishedAuctionReminders(new Date(), auctionPosts);
       } catch (error) {
         logger.error('Reminder cleanup failed:', error.message);
       }
@@ -118,7 +127,13 @@ function getPostEffectiveEndMs(post) {
     groupId: config.vkGroupId,
     postId: post.id
   });
-  const summaryRows = auction ? getCurrentSummary(auction.id) : [];
+  const summaryRows = auction
+    ? (
+        isSingleAuctionPost(post)
+          ? filterSingleAuctionSummaryRows(getCurrentSummary(auction.id))
+          : getCurrentSummary(auction.id)
+      )
+    : [];
   const endIso = getAuctionEffectiveEndIso(postDateIso, summaryRows);
 
   return endIso ? new Date(endIso).getTime() : null;

@@ -9,6 +9,8 @@ import {
   voidBidAndRecalculateLot
 } from './db.js';
 import { publishOrRefreshSummary } from './auctionService.js';
+import { getAuctionPosts, isSingleAuctionPost } from './auctionPosts.js';
+import { filterSingleAuctionSummaryRows } from './singleAuctionParser.js';
 import { logger } from './logger.js';
 import { config } from './config.js';
 
@@ -169,6 +171,25 @@ function formatBid(bid) {
   ].join(' | ');
 }
 
+async function isAdminSingleAuction(auction) {
+  try {
+    const posts = await getAuctionPosts();
+    const post = posts.find((item) => item.id === auction.post_id);
+
+    return post ? isSingleAuctionPost(post) : false;
+  } catch (error) {
+    logger.warn(
+      `ADMIN failed to detect single-auction tag for post ${auction.post_id}:`,
+      error.message
+    );
+    return false;
+  }
+}
+
+function getVisibleAdminRows(rows, isSingleAuction) {
+  return isSingleAuction ? filterSingleAuctionSummaryRows(rows) : rows;
+}
+
 async function main() {
   const auctions = getRecentAuctionsForAdmin();
   const activeAuctionCount = auctions.filter((auction) => auction.status === 'active').length;
@@ -192,7 +213,8 @@ async function main() {
   });
   if (!auction) return;
 
-  const lots = getLotsForAdmin(auction.id);
+  const isSingleAuction = await isAdminSingleAuction(auction);
+  const lots = getVisibleAdminRows(getLotsForAdmin(auction.id), isSingleAuction);
   if (!lots.length) {
     console.log('No lots found for this auction.');
     return;
@@ -222,7 +244,7 @@ async function main() {
 
   console.log('');
   console.log('Current auction summary:');
-  printAuctionSummary(getCurrentSummary(auction.id));
+  printAuctionSummary(getVisibleAdminRows(getCurrentSummary(auction.id), isSingleAuction));
 
   console.log('');
   console.log(`Bid history for lot ${lot.lot_number}, newest first:`);
@@ -266,7 +288,7 @@ async function main() {
   }
 
   const freshAuction = getAuctionById(auction.id);
-  await publishOrRefreshSummary(freshAuction.post_id, freshAuction.id);
+  await publishOrRefreshSummary(freshAuction.post_id, freshAuction.id, { isSingleAuction });
 
   logger.warn(
     `ADMIN summary refreshed: auction_id=${freshAuction.id}, post_id=${freshAuction.post_id}`

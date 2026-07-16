@@ -73,3 +73,11 @@ export function parseSingleAuctionBidAmount(text) {
     reason: 'single_auction_amount'
   };
 }
+
+export function isSingleAuctionLotSelectionValid(parseResult) {
+  return (parseResult?.bids || []).every((bid) => bid.lot === 1);
+}
+
+export function filterSingleAuctionSummaryRows(summaryRows = []) {
+  return summaryRows.filter((row) => row.lot_number === 1);
+}

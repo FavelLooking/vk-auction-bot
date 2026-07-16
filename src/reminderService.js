@@ -12,6 +12,7 @@ import {
   clearHappySantaBroadcastClaim
 } from './db.js';
 import { getAuctionPosts, isSingleAuctionPost } from './auctionPosts.js';
+import { filterSingleAuctionSummaryRows } from './singleAuctionParser.js';
 import {
   getAuctionEffectiveEndIso,
   getMoscowDateKey
@@ -217,6 +218,14 @@ function buildHappySantaAttachments({ endingPost, newPost }) {
   ].filter(Boolean);
 }
 
+function getVisibleSummaryRows(auctionId, post) {
+  const summaryRows = getCurrentSummary(auctionId);
+
+  return isSingleAuctionPost(post)
+    ? filterSingleAuctionSummaryRows(summaryRows)
+    : summaryRows;
+}
+
 export async function sendHappySantaReminderForAuction({
   post,
   auction,
@@ -224,7 +233,7 @@ export async function sendHappySantaReminderForAuction({
   now = new Date(),
   force = false
 }) {
-  const summaryRows = getCurrentSummary(auction.id);
+  const summaryRows = getVisibleSummaryRows(auction.id, post);
 
   if (!summaryRows.length) {
     return {
@@ -375,7 +384,7 @@ async function publishReminder({ post, auction, scheduleTime, auctionPosts }) {
     return;
   }
 
-  const summaryRows = getCurrentSummary(auction.id);
+  const summaryRows = getVisibleSummaryRows(auction.id, post);
 
   if (!summaryRows.length) {
     logger.info(`Skipping reminder for post ${post.id}: no current bids found.`);
@@ -429,7 +438,7 @@ export async function sendManualHappySantaReminders({ now = new Date(), force = 
   for (const post of auctionPosts) {
     const postDateIso = post.date ? new Date(post.date * 1000).toISOString() : null;
     const auction = getOrCreateAuction(config.vkGroupId, post.id, postDateIso, null);
-    const summaryRows = getCurrentSummary(auction.id);
+    const summaryRows = getVisibleSummaryRows(auction.id, post);
     const endIso = getAuctionEffectiveEndIso(auction.post_date, summaryRows);
 
     if (
@@ -495,12 +504,16 @@ export async function runAuctionReminders(scheduleTime, now = new Date()) {
   }
 }
 
-export async function cleanupFinishedAuctionReminders(now = new Date()) {
+export async function cleanupFinishedAuctionReminders(now = new Date(), auctionPosts = []) {
   const reminders = getActiveAuctionReminderRecords();
 
   for (const reminder of reminders) {
     try {
-      const summaryRows = getCurrentSummary(reminder.auction_id);
+      const post = auctionPosts.find((auctionPost) => auctionPost.id === reminder.post_id);
+      const rawSummaryRows = getCurrentSummary(reminder.auction_id);
+      const summaryRows = post && isSingleAuctionPost(post)
+        ? filterSingleAuctionSummaryRows(rawSummaryRows)
+        : rawSummaryRows;
       const endIso = getAuctionEffectiveEndIso(reminder.post_date, summaryRows);
 
       if (!endIso || new Date(endIso).getTime() > now.getTime()) {

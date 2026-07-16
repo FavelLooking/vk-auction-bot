@@ -20,7 +20,11 @@ import {
 } from './db.js';
 import { logger } from './logger.js';
 import { parseCommentText } from './parser.js';
-import { parseSingleAuctionBidAmount } from './singleAuctionParser.js';
+import {
+  filterSingleAuctionSummaryRows,
+  isSingleAuctionLotSelectionValid,
+  parseSingleAuctionBidAmount
+} from './singleAuctionParser.js';
 import { parseCommentWithLmStudio } from './lmstudio.js';
 import {
   getUserInfo,
@@ -220,6 +224,16 @@ function buildInvalidBidReply({ userId, userName }) {
 Шаг ставки: ${config.minBidStep} ₽`;
 }
 
+function buildInvalidSingleAuctionLotReply({ userId, userName }) {
+  const mention = buildUserMention(userId, userName);
+
+  return `${mention}, в одиночном аукционе можно делать ставки только на единственный лот.
+Используйте формат:
+500
+или
+1-500`;
+}
+
 function formatTime(iso) {
   if (!iso) return null;
 
@@ -305,8 +319,10 @@ async function safeReply({ postId, commentId, replyText }) {
   }
 }
 
-export async function publishOrRefreshSummary(postId, auctionId) {
-  const summaryRows = getCurrentSummary(auctionId);
+export async function publishOrRefreshSummary(postId, auctionId, { isSingleAuction = false } = {}) {
+  const summaryRows = isSingleAuction
+    ? filterSingleAuctionSummaryRows(getCurrentSummary(auctionId))
+    : getCurrentSummary(auctionId);
   const summaryText = buildSummaryText(summaryRows);
   const existingSummary = getAuctionSummaryRecord(auctionId);
 
@@ -448,6 +464,37 @@ export async function processAuctionComments({
     }
 
     const userName = resolveUserName(comment, userMap);
+
+    if (isSingleAuction && !isSingleAuctionLotSelectionValid(parseResult)) {
+      saveProcessedComment({
+        commentId: comment.id,
+        parentId: comment.parents_stack?.[0] ?? null,
+        fromId: comment.from_id,
+        text: comment.text,
+        parseStatus: 'invalid',
+        rawResultJson: JSON.stringify({
+          parseResult,
+          reason: 'single_auction_invalid_lot'
+        })
+      });
+
+      logger.info(
+        `Rejected single-auction bid in post ${postId}, comment ${comment.id}: only lot 1 is allowed`
+      );
+
+      if (config.autoReply && !suppressNotifications) {
+        await safeReply({
+          postId,
+          commentId: comment.id,
+          replyText: buildInvalidSingleAuctionLotReply({
+            userId: comment.from_id,
+            userName
+          })
+        });
+      }
+
+      continue;
+    }
 
     if (!parseResult.bids.length) {
       saveProcessedComment({
@@ -635,16 +682,18 @@ export async function processAuctionComments({
   }
 
   if (shouldRefreshSummary) {
-    await publishOrRefreshSummary(postId, auction.id);
+    await publishOrRefreshSummary(postId, auction.id, { isSingleAuction });
   }
 
   return { shouldRefreshSummary };
 }
 
-export function printCurrentSummary(postId, postDate = null) {
+export function printCurrentSummary(postId, postDate = null, { isSingleAuction = false } = {}) {
   const postDateIso = postDate ? new Date(postDate * 1000).toISOString() : null;
   const auction = getOrCreateAuction(config.vkGroupId, postId, postDateIso, null);
-  const summary = getCurrentSummary(auction.id);
+  const summary = isSingleAuction
+    ? filterSingleAuctionSummaryRows(getCurrentSummary(auction.id))
+    : getCurrentSummary(auction.id);
 
   if (!summary.length) {
     logger.info(`No current bids yet for post ${postId}.`);
@@ -660,7 +709,7 @@ export function printCurrentSummary(postId, postDate = null) {
 }
 
 // Временно выключено, пока не будет полностью добита логика завершения по времени
-export async function finalizeExpiredLots() {
+export async function finalizeExpiredLots({ singleAuctionPostIds = new Set() } = {}) {
   const nowIso = new Date().toISOString();
   const expiredLots = getExpiredOpenLots(nowIso);
 
@@ -669,6 +718,13 @@ export async function finalizeExpiredLots() {
   }
 
   for (const lot of expiredLots) {
+    if (singleAuctionPostIds.has(lot.post_id) && lot.lot_number !== 1) {
+      logger.info(
+        `Skip finalize for single-auction post ${lot.post_id}, lot ${lot.lot_number}: only lot 1 is visible`
+      );
+      continue;
+    }
+
     // Перечитываем актуальное состояние лота прямо перед закрытием
     const currentState = getLotState(lot.auction_id, lot.lot_number);
 
@@ -710,7 +766,9 @@ export async function finalizeExpiredLots() {
       }
     }
 
-    await publishOrRefreshSummary(lot.post_id, lot.auction_id);
+    await publishOrRefreshSummary(lot.post_id, lot.auction_id, {
+      isSingleAuction: singleAuctionPostIds.has(lot.post_id)
+    });
   }
 }
 
