@@ -1,8 +1,13 @@
 import { config } from './config.js';
 import { getWallPosts } from './vk.js';
 
+const CANONICAL_SINGLE_AUCTION_TAG = '#CP_Аукцион_Одиночный'.toLowerCase();
+
 function normalizePostText(text) {
-  return String(text || '').toLowerCase();
+  return String(text || '')
+    .replace(/ё/g, 'е')
+    .replace(/Ё/g, 'Е')
+    .toLowerCase();
 }
 
 export function isAuctionPost(post) {
@@ -16,7 +21,12 @@ export function isSingleAuctionPost(post) {
   const text = normalizePostText(post.text);
   if (!text) return false;
 
-  return text.includes(config.singleAuctionTag);
+  const tags = new Set([
+    normalizePostText(config.singleAuctionTag),
+    CANONICAL_SINGLE_AUCTION_TAG
+  ]);
+
+  return [...tags].some((tag) => tag && text.includes(tag));
 }
 
 export async function getAuctionPosts() {
