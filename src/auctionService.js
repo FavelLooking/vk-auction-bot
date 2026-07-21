@@ -234,6 +234,29 @@ function buildInvalidSingleAuctionLotReply({ userId, userName }) {
 1-500`;
 }
 
+function getSingleAuctionRejectReason(parseResult) {
+  if (!parseResult?.bids?.length) {
+    return 'invalid format';
+  }
+
+  return parseResult.bids.some((bid) => bid.lot !== 1)
+    ? 'lot != 1'
+    : 'none';
+}
+
+function logSingleAuctionDebug({ comment, isSingleAuction, mainParseResult, parseResult }) {
+  const bids = (parseResult?.bids || []).map((bid) => ({
+    lot: bid.lot,
+    amount: bid.amount
+  }));
+
+  logger.info(`DEBUG Single auction comment:\ntext=${JSON.stringify(comment.text || '')}`);
+  logger.info(`DEBUG isSingleAuction: ${isSingleAuction}`);
+  logger.info(`DEBUG Main parser result:\n${JSON.stringify(mainParseResult, null, 2)}`);
+  logger.info(`DEBUG Parse result:\n${JSON.stringify(bids, null, 2)}`);
+  logger.info(`DEBUG Reject reason:\n${getSingleAuctionRejectReason(parseResult)}`);
+}
+
 function formatTime(iso) {
   if (!iso) return null;
 
@@ -438,7 +461,8 @@ export async function processAuctionComments({
     const suppressNotifications = isHistoricalComment;
     const suppressSideEffects = isHistoricalComment;
 
-    let parseResult = parseCommentText(comment.text);
+    const mainParseResult = parseCommentText(comment.text);
+    let parseResult = mainParseResult;
 
     if (!parseResult.bids.length && isSingleAuction) {
       parseResult = parseSingleAuctionBidAmount(comment.text) || parseResult;
@@ -464,6 +488,15 @@ export async function processAuctionComments({
     }
 
     const userName = resolveUserName(comment, userMap);
+
+    if (isSingleAuction) {
+      logSingleAuctionDebug({
+        comment,
+        isSingleAuction,
+        mainParseResult,
+        parseResult
+      });
+    }
 
     if (isSingleAuction && !isSingleAuctionLotSelectionValid(parseResult)) {
       saveProcessedComment({
