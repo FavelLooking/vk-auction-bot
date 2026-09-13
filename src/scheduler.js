@@ -1,19 +1,16 @@
 import { config } from './config.js';
 import { logger } from './logger.js';
-import { getWallComments, isTemporaryVkError } from './vk.js';
-import { getAuctionPosts, isSingleAuctionPost } from './auctionPosts.js';
+import { getFailureBackoffMs } from './vk.js';
+import { getAuctionPosts } from './auctionPosts.js';
 import {
-  getAuctionEffectiveEndIso,
   getMoscowDateParts,
   getMoscowDateKey
 } from './auctionTime.js';
-import { getAuctionByGroupPost, getCurrentSummary } from './db.js';
-import { filterSingleAuctionSummaryRows } from './singleAuctionParser.js';
 import {
-  processAuctionComments,
-  printCurrentSummary,
-  finalizeExpiredLots
-} from './auctionService.js';
+  getWorkerState, saveWorkerState, registerPollingPost,
+  getPollingAuctions, getAuctionsMissingPollState
+} from './db.js';
+import { pollAuction } from './auctionPolling.js';
 import {
   runAuctionReminders,
   sendManualHappySantaReminders,
@@ -26,31 +23,9 @@ const HAPPY_SANTA_ONLY_SCHEDULE_TYPE = 'happy_santa_only';
 let isRunning = false;
 let isReminderRunning = false;
 let lastReminderRunKey = null;
-let lastLoggedPollInterval = null;
+let firstPoll = true;
 
-async function processSinglePost(post) {
-  const response = await getWallComments({
-    groupId: config.vkGroupId,
-    postId: post.id,
-    count: 100,
-    sort: 'asc'
-  });
-
-  const comments = response.items || [];
-
-  await processAuctionComments({
-    postId: post.id,
-    postDate: post.date,
-    isSingleAuction: isSingleAuctionPost(post),
-    comments
-  });
-
-  printCurrentSummary(post.id, post.date, {
-    isSingleAuction: isSingleAuctionPost(post)
-  });
-}
-
-export async function tick() {
+export async function tick(now = new Date()) {
   if (isRunning) {
     logger.warn('Previous tick is still running, skipping.');
     return [];
@@ -60,133 +35,51 @@ export async function tick() {
   let auctionPosts = [];
 
   try {
-    auctionPosts = await getAuctionPosts();
-
-    if (!auctionPosts.length) {
-      logger.info('No auction posts found.');
-      return auctionPosts;
-    }
-
-    logger.info(
-      `Found ${auctionPosts.length} auction post(s): ${auctionPosts.map((p) => p.id).join(', ')}`
-    );
-
-    for (const post of auctionPosts) {
+    const discovery = getWorkerState('auction_discovery') || { nextAt: 0, failures: 0 };
+    if (now.getTime() >= discovery.nextAt) {
       try {
-        await processSinglePost(post);
+        const recoverPostIds = getAuctionsMissingPollState().map((auction) => auction.post_id);
+        const discovered = await getAuctionPosts({ recoverPostIds });
+        for (const post of discovered) registerPollingPost(post);
+        saveWorkerState('auction_discovery', {
+          nextAt: now.getTime() + config.auctionDiscoveryMs, failures: 0, lastSuccess: now.toISOString()
+        });
+        logger.info(`Auction discovery: ${discovered.length} post(s); next in ${config.auctionDiscoveryMs / 1000}s`);
       } catch (error) {
-        if (isTemporaryVkError(error)) {
-          logger.warn(`Skipped VK request while processing post ${post.id}:`, error.message);
-        } else {
-          logger.error(`Failed to process post ${post.id}:`, error.message);
-        }
+        saveWorkerState('auction_discovery', {
+          ...discovery, failures: discovery.failures + 1,
+          nextAt: Math.max(now.getTime() + getFailureBackoffMs(discovery.failures + 1), error.retryAt || 0)
+        });
+        logger.warn('Auction discovery deferred; continuing saved auctions:', error.message);
       }
     }
-
-    if (!config.rebuildMode) {
-      await finalizeExpiredLots({
-        singleAuctionPostIds: new Set(
-          auctionPosts
-            .filter((post) => isSingleAuctionPost(post))
-            .map((post) => post.id)
-        )
-      });
-      try {
-        await cleanupFinishedAuctionReminders(new Date(), auctionPosts);
-      } catch (error) {
-        logger.error('Reminder cleanup failed:', error.message);
+    const auctions = getPollingAuctions();
+    auctionPosts = auctions.map((auction) => JSON.parse(auction.post_json));
+    const reconciledPosts = [];
+    for (let i = 0; i < auctions.length; i += 1) {
+      const auction = auctions[i];
+      if (auction.poll_status === 'stopped') continue;
+      const resumeNow = firstPoll && !auction.consecutive_failures;
+      if (!resumeNow && auction.next_poll_at && Date.parse(auction.next_poll_at) > now.getTime()) continue;
+      if (await pollAuction(auctionPosts[i], { now })) {
+        reconciledPosts.push(auctionPosts[i]);
       }
     }
+    firstPoll = false;
+    if (!config.rebuildMode && reconciledPosts.length) {
+      await cleanupFinishedAuctionReminders(now, reconciledPosts, { onlyProvidedPosts: true });
+    }
+    saveWorkerState('worker_health', { lastTick: new Date().toISOString() });
     return auctionPosts;
   } catch (error) {
-    if (isTemporaryVkError(error)) {
-      logger.warn('Skipped VK request during auction tick:', error.message);
-    } else {
-      logger.error('Tick failed:', error.message);
-    }
+    logger.error('Tick failed:', error.message);
     return auctionPosts;
   } finally {
     isRunning = false;
   }
 }
 
-function formatIntervalLabel(ms) {
-  return `${Math.round(ms / 1000)}s`;
-}
-
-function getPostDateMs(post) {
-  return post.date ? post.date * 1000 : null;
-}
-
-function getPostEffectiveEndMs(post) {
-  const postDateMs = getPostDateMs(post);
-  if (!postDateMs) return null;
-
-  const postDateIso = new Date(postDateMs).toISOString();
-  const auction = getAuctionByGroupPost({
-    groupId: config.vkGroupId,
-    postId: post.id
-  });
-  const summaryRows = auction
-    ? (
-        isSingleAuctionPost(post)
-          ? filterSingleAuctionSummaryRows(getCurrentSummary(auction.id))
-          : getCurrentSummary(auction.id)
-      )
-    : [];
-  const endIso = getAuctionEffectiveEndIso(postDateIso, summaryRows);
-
-  return endIso ? new Date(endIso).getTime() : null;
-}
-
-function getAdaptivePollInterval(auctionPosts, now = new Date()) {
-  const moscow = getMoscowDateParts(now);
-
-  if (moscow.hour >= 0 && moscow.hour < 7) {
-    return {
-      intervalMs: config.pollNightIntervalMs,
-      reason: 'night mode'
-    };
-  }
-
-  const nowMs = now.getTime();
-
-  for (const post of auctionPosts) {
-    const postDateMs = getPostDateMs(post);
-
-    if (postDateMs && nowMs - postDateMs <= config.pollFastAfterPostMs) {
-      return {
-        intervalMs: config.pollFastIntervalMs,
-        reason: 'new auction'
-      };
-    }
-
-    const endMs = getPostEffectiveEndMs(post);
-
-    if (endMs && endMs > nowMs && endMs - nowMs <= config.pollClosingSoonMs) {
-      return {
-        intervalMs: config.pollFastIntervalMs,
-        reason: 'closing soon'
-      };
-    }
-  }
-
-  return {
-    intervalMs: config.pollNormalIntervalMs,
-    reason: 'normal mode'
-  };
-}
-
-function logPollInterval(intervalMs, reason) {
-  if (lastLoggedPollInterval === intervalMs) {
-    return;
-  }
-
-  lastLoggedPollInterval = intervalMs;
-  logger.info(`Poll interval: ${formatIntervalLabel(intervalMs)} (${reason})`);
-}
-
-function getReminderSchedule(now = new Date()) {
+export function getReminderSchedule(now = new Date()) {
   const parts = getMoscowDateParts(now);
 
   if (parts.hour === 8) {
@@ -255,23 +148,47 @@ export async function reminderTick(now = new Date()) {
 
 export function startScheduler() {
   logger.info('Starting scheduler.');
-
+  let stopped = false;
+  let pollTimer;
+  let reminderTimer;
+  let pollTask = Promise.resolve();
+  let reminderTask = Promise.resolve();
   async function pollLoop() {
-    const auctionPosts = await tick();
-    const { intervalMs, reason } = getAdaptivePollInterval(auctionPosts);
-    logPollInterval(intervalMs, reason);
-    setTimeout(pollLoop, intervalMs);
+    await tick();
+    if (stopped) return;
+    const nextTimes = getPollingAuctions()
+      .filter((auction) => auction.poll_status !== 'stopped' && auction.next_poll_at)
+      .map((auction) => Date.parse(auction.next_poll_at));
+    nextTimes.push(getWorkerState('auction_discovery')?.nextAt || Date.now() + 30000);
+    const delay = Math.max(1000, Math.min(30000, ...nextTimes.map((time) => time - Date.now())));
+    pollTimer = setTimeout(runPoll, delay);
   }
-
-  pollLoop();
+  function runPoll() {
+    pollTask = pollLoop().catch((error) => {
+      logger.error('Polling loop failed:', error.message);
+      if (!stopped) pollTimer = setTimeout(runPoll, config.vkBackoffMaxMs);
+    });
+  }
+  function runReminder() {
+    if (isReminderRunning) return;
+    reminderTask = reminderTick().catch((error) => logger.error('Reminder loop failed:', error.message));
+  }
+  runPoll();
 
   if (config.auctionRemindersEnabled) {
     logger.info(
       'Starting auction reminder scheduler at 08:00 and 17:00 Europe/Moscow; Happy Santa-only at 19:35 Europe/Moscow.'
     );
-    reminderTick();
-    setInterval(() => reminderTick(), 60 * 1000);
+    runReminder();
+    reminderTimer = setInterval(runReminder, 60 * 1000);
   } else {
     logger.info('Auction reminder scheduler is disabled.');
   }
+  return async function stopScheduler() {
+    stopped = true;
+    clearTimeout(pollTimer);
+    clearInterval(reminderTimer);
+    await Promise.allSettled([pollTask, reminderTask]);
+    logger.info('Scheduler stopped; completed work is persisted.');
+  };
 }

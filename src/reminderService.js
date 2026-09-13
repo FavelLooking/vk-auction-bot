@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import {
+  db,
   getOrCreateAuction,
   getCurrentSummary,
   getAuctionReminderRecord,
@@ -9,7 +10,10 @@ import {
   getHappySantaBroadcastRecord,
   claimHappySantaBroadcast,
   markHappySantaBroadcastSent,
-  clearHappySantaBroadcastClaim
+  clearHappySantaBroadcastClaim,
+  saveReminderPackage,
+  getReminderPackage,
+  expireReminderPackages
 } from './db.js';
 import { getAuctionPosts, isSingleAuctionPost } from './auctionPosts.js';
 import { filterSingleAuctionSummaryRows } from './singleAuctionParser.js';
@@ -18,8 +22,9 @@ import {
   getMoscowDateKey
 } from './auctionTime.js';
 import { logger } from './logger.js';
-import { createWallPost, deleteWallPost } from './vk.js';
+import { deleteWallPost } from './vk.js';
 import { sendHappySantaReminder } from './services/notifications/happySantaChannel.js';
+import { getReminderPublisher } from './services/notifications/reminderPublisher.js';
 
 const MORNING_SCHEDULE_TIME = '08:00';
 const EVENING_SCHEDULE_TIME = '17:00';
@@ -365,7 +370,22 @@ function isAuctionActive(endIso, now = new Date()) {
   return Boolean(endIso) && new Date(endIso).getTime() > now.getTime();
 }
 
-async function publishReminder({ post, auction, scheduleTime, auctionPosts }) {
+export function buildAuctionReminderPayload({ post, summaryRows, scheduleTime, postDate }) {
+  const message = buildReminderText({ postId: post.id, summaryRows, scheduleTime,
+    isSingleAuction: isSingleAuctionPost(post) });
+  const attachment = getFirstPhotoAttachment(post);
+  return {
+    groupId: config.vkGroupId,
+    auctionPostId: post.id,
+    scheduleTime,
+    message: `${message}\n\n#CP_НапоминаниеАукциона`,
+    attachments: attachment ? [attachment] : [],
+    auctionUrl: getAuctionLink(post.id),
+    expiresAt: getAuctionEffectiveEndIso(postDate, summaryRows)
+  };
+}
+
+async function publishReminder({ post, auction, scheduleTime, now, publisher }) {
   const existingReminder = getAuctionReminderRecord({
     auctionId: auction.id,
     scheduleTime
@@ -379,7 +399,7 @@ async function publishReminder({ post, auction, scheduleTime, auctionPosts }) {
     });
 
     logger.info(
-      `Reminder already tracked for post ${post.id} at ${scheduleTime}; skipping duplicate post.`
+      `Reminder already tracked for post ${post.id} at ${scheduleTime}; package=${getReminderPackage(auction.id, scheduleTime)?.status || 'legacy'}, skipping duplicate.`
     );
     return;
   }
@@ -393,41 +413,22 @@ async function publishReminder({ post, auction, scheduleTime, auctionPosts }) {
 
   const endIso = getAuctionEffectiveEndIso(auction.post_date, summaryRows);
 
-  if (!isAuctionActive(endIso) || !isAuctionEndingToday(auction.post_date, endIso)) {
+  if (!isAuctionActive(endIso, now) || !isAuctionEndingToday(auction.post_date, endIso, now)) {
     return;
   }
 
-  const reminderText = buildReminderText({
-    postId: post.id,
-    summaryRows,
-    scheduleTime,
-    isSingleAuction: isSingleAuctionPost(post)
+  const payload = buildAuctionReminderPayload({
+    post, summaryRows, scheduleTime, postDate: auction.post_date
   });
-  const attachment = getFirstPhotoAttachment(post);
-
-  if (config.dryRun) {
-    logger.info(`[DRY_RUN] Reminder for post ${post.id}:\n${reminderText}`);
-    saveAuctionReminderRecord({
-      auctionId: auction.id,
-      scheduleTime,
-      reminderPostId: null
-    });
-    return;
-  }
-
-  const result = await createWallPost({
-    groupId: config.vkGroupId,
-    message: reminderText,
-    attachments: attachment ? [attachment] : []
-  });
-
-  saveAuctionReminderRecord({
-    auctionId: auction.id,
-    scheduleTime,
-    reminderPostId: result.post_id ?? null
-  });
-
-  logger.info(`Reminder published for auction post ${post.id}: reminder post ${result.post_id}`);
+  const result = config.dryRun
+    ? { status: 'pending', reason: 'dry_run' }
+    : await publisher.publish(payload);
+  db.transaction(() => {
+    saveReminderPackage({ auctionId: auction.id, scheduleTime, payload,
+      publisher: publisher.name, status: result.status, reason: result.reason });
+    saveAuctionReminderRecord({ auctionId: auction.id, scheduleTime, reminderPostId: result.postId ?? null });
+  })();
+  logger.info(`Reminder ${result.status}: post=${post.id}, schedule=${scheduleTime}, publisher=${publisher.name}; ${result.reason || `VK post ${result.postId}`}`);
 }
 
 export async function sendManualHappySantaReminders({ now = new Date(), force = false } = {}) {
@@ -478,9 +479,9 @@ export async function sendManualHappySantaReminders({ now = new Date(), force = 
   return results;
 }
 
-export async function runAuctionReminders(scheduleTime, now = new Date()) {
+export async function runAuctionReminders(scheduleTime, now = new Date(), { publisher = getReminderPublisher(), auctionPosts: suppliedPosts } = {}) {
   const scheduleDate = getMoscowDateKey(now);
-  const auctionPosts = await getAuctionPosts();
+  const auctionPosts = suppliedPosts ?? await getAuctionPosts();
 
   if (!auctionPosts.length) {
     logger.info(`No auction posts found for reminder run ${scheduleDate} ${scheduleTime}.`);
@@ -496,7 +497,8 @@ export async function runAuctionReminders(scheduleTime, now = new Date()) {
         post,
         auction,
         scheduleTime,
-        auctionPosts
+        now,
+        publisher
       });
     } catch (error) {
       logger.error(`Failed to publish reminder for post ${post.id}:`, error.message);
@@ -504,12 +506,13 @@ export async function runAuctionReminders(scheduleTime, now = new Date()) {
   }
 }
 
-export async function cleanupFinishedAuctionReminders(now = new Date(), auctionPosts = []) {
+export async function cleanupFinishedAuctionReminders(now = new Date(), auctionPosts = [], { onlyProvidedPosts = false } = {}) {
   const reminders = getActiveAuctionReminderRecords();
 
   for (const reminder of reminders) {
     try {
       const post = auctionPosts.find((auctionPost) => auctionPost.id === reminder.post_id);
+      if (onlyProvidedPosts && !post) continue;
       const rawSummaryRows = getCurrentSummary(reminder.auction_id);
       const summaryRows = post && isSingleAuctionPost(post)
         ? filterSingleAuctionSummaryRows(rawSummaryRows)
@@ -519,6 +522,8 @@ export async function cleanupFinishedAuctionReminders(now = new Date(), auctionP
       if (!endIso || new Date(endIso).getTime() > now.getTime()) {
         continue;
       }
+
+      expireReminderPackages(reminder.auction_id);
 
       if (reminder.reminder_post_id && !config.dryRun) {
         try {

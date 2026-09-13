@@ -8,6 +8,11 @@
     "dev": "node --watch src/index.js",
     "admin": "node src/admin.js",
     "hs:test": "node scripts/send-hs-test.js",
+    "status": "node src/index.js status",
+    "api-usage": "node src/index.js api-usage",
+    "check-config": "node src/index.js --check-config",
+    "test:migration": "node test/migration.test.js",
+    "test:reminders": "node test/reminderPublisher.test.js",
     "test:single-auction": "node test/singleAuctionParser.test.js",
     "test:restart-safety": "node test/restartSafety.test.js"
   },

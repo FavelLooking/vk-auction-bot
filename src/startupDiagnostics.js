@@ -5,7 +5,7 @@ import { logger } from './logger.js';
 
 const MOSCOW_TIME_ZONE = 'Europe/Moscow';
 const REQUIRED_ENV_VARS = [
-  'VK_USER_TOKEN',
+  'VK_SERVICE_TOKEN',
   'VK_GROUP_TOKEN',
   'VK_GROUP_ID'
 ];
@@ -61,6 +61,10 @@ function getNextMoscowRun(hour, minute, now = new Date()) {
 function getConfigWarnings() {
   const warnings = [];
 
+  if (Object.keys(process.env).some((name) => /^POLL_(INTERVAL_MS|FAST_|NORMAL_|NIGHT_|CLOSING_SOON_MS)/.test(name))) {
+    warnings.push('Legacy polling variables are ignored; configure the new POLL_*_MS settings documented in README.md');
+  }
+
   for (const name of REQUIRED_ENV_VARS) {
     if (!process.env[name]) {
       warnings.push(`${name} is not configured`);
@@ -80,6 +84,8 @@ function getConfigWarnings() {
 
 export function logStartupDiagnostics() {
   const happySantaEnabled = Boolean(config.happySantaApiToken && config.happySantaAuctionListId);
+  const packageOnly = config.dryRun || ['package-only', 'disabled'].includes(config.reminderPublisher);
+  const reminderMode = packageOnly ? 'package only' : 'VK wall via group token';
   const warnings = getConfigWarnings();
 
   db.prepare('SELECT 1').get();
@@ -96,8 +102,11 @@ export function logStartupDiagnostics() {
   logger.info(`VK Group: -${Math.abs(config.vkGroupId)}`);
   logger.info('');
   logger.info('Polling: enabled');
+  logger.info('VK reads: service token; comments: group token');
+  logger.info(`Polling intervals (s): quiet=${config.pollQuietMs / 1000}, active=${config.pollActiveMs / 1000}, approaching=${config.pollApproachingMs / 1000}, closing=${config.pollClosingMs / 1000}, deadline=${config.pollDeadlineMs / 1000}, grace=${config.pollGraceMs / 1000}`);
   logger.info(`Auto Reply: ${config.autoReply ? 'enabled' : 'disabled'}`);
   logger.info(`Reminder Scheduler: ${config.auctionRemindersEnabled ? 'enabled' : 'disabled'}`);
+  logger.info(`Reminder publisher: ${reminderMode}${config.dryRun ? ' (DRY_RUN)' : ''}`);
   logger.info('');
   logger.info(`Happy Santa: ${happySantaEnabled ? 'enabled' : 'disabled'}`);
   logger.info(`Mailing List: ${config.happySantaAuctionListId || 'not configured'}`);
@@ -105,8 +114,8 @@ export function logStartupDiagnostics() {
   logger.info(`Timezone: ${process.env.TZ || MOSCOW_TIME_ZONE}`);
   logger.info('');
   logger.info('Next reminder:');
-  logger.info(`08:00 -> ${getNextMoscowRun(8, 0)}`);
-  logger.info(`17:00 -> ${getNextMoscowRun(17, 0)}`);
+  logger.info(`08:00 -> ${getNextMoscowRun(8, 0)} (${reminderMode})`);
+  logger.info(`17:00 -> ${getNextMoscowRun(17, 0)} (${reminderMode})`);
   logger.info(`19:35 -> ${getNextMoscowRun(19, 35)}`);
 
   if (warnings.length) {

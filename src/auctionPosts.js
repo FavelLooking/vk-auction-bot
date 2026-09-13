@@ -1,5 +1,4 @@
 import { config } from './config.js';
-import { getWallPosts } from './vk.js';
 
 const CANONICAL_SINGLE_AUCTION_TAG = '#CP_Аукцион_Одиночный'.toLowerCase();
 
@@ -29,19 +28,22 @@ export function isSingleAuctionPost(post) {
   return [...tags].some((tag) => tag && text.includes(tag));
 }
 
-export async function getAuctionPosts() {
+function isSelectedAuctionPost(post) {
+  return (!config.onlyPinned || post.is_pinned) && isAuctionPost(post);
+}
+
+export async function getAuctionPosts({ recoverPostIds = [] } = {}) {
+  const { getWallPosts, getWallPostsByIds } = await import('./vk.js');
   const response = await getWallPosts({
     groupId: config.vkGroupId,
     count: config.auctionPostSearchLimit
   });
 
-  const items = response.items || [];
-
-  return items.filter((post) => {
-    if (config.onlyPinned && !post.is_pinned) {
-      return false;
-    }
-
-    return isAuctionPost(post);
-  });
+  const items = new Map(response.items.map((post) => [post.id, post]));
+  const missing = recoverPostIds.filter((id) => !items.has(id));
+  for (let offset = 0; offset < missing.length; offset += 100) {
+    const recovered = await getWallPostsByIds({ groupId: config.vkGroupId, postIds: missing.slice(offset, offset + 100) });
+    for (const post of Array.isArray(recovered) ? recovered : recovered.items) items.set(post.id, post);
+  }
+  return [...items.values()].filter(isSelectedAuctionPost);
 }

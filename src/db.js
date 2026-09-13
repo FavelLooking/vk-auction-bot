@@ -19,7 +19,11 @@ const EXPECTED_TABLES = [
   'bot_replies',
   'auction_reminders',
   'vk_user_cache',
-  'happy_santa_broadcasts'
+  'happy_santa_broadcasts',
+  'auction_poll_state',
+  'worker_state',
+  'vk_api_usage',
+  'reminder_packages'
 ];
 
 function getUserTableNames() {
@@ -203,6 +207,46 @@ CREATE TABLE IF NOT EXISTS lot_state (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     sent_at TEXT,
     response_json TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS auction_poll_state (
+    auction_id INTEGER PRIMARY KEY,
+    post_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    last_comment_id INTEGER NOT NULL DEFAULT 0,
+    last_comment_date INTEGER,
+    last_successful_poll TEXT,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    next_poll_at TEXT,
+    last_error_code TEXT,
+    FOREIGN KEY (auction_id) REFERENCES auctions(id)
+  );
+  CREATE TABLE IF NOT EXISTS worker_state (
+    key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS vk_api_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    method TEXT NOT NULL,
+    token_type TEXT NOT NULL,
+    success INTEGER NOT NULL,
+    vk_error_code INTEGER,
+    error_kind TEXT
+  );
+  CREATE INDEX IF NOT EXISTS vk_api_usage_timestamp ON vk_api_usage(timestamp);
+  CREATE TABLE IF NOT EXISTS reminder_packages (
+    auction_id INTEGER NOT NULL,
+    schedule_time TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    publisher TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reason TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (auction_id, schedule_time),
+    FOREIGN KEY (auction_id) REFERENCES auctions(id)
   );
 `);
 
@@ -804,5 +848,87 @@ export function saveCachedVkUsers(users = []) {
   });
 
   tx(users);
+}
+
+export function getWorkerState(key) {
+  const row = db.prepare('SELECT value_json FROM worker_state WHERE key = ?').get(key);
+  return row ? JSON.parse(row.value_json) : null;
+}
+
+export function saveWorkerState(key, value) {
+  db.prepare(`INSERT INTO worker_state (key, value_json) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json`).run(key, JSON.stringify(value));
+}
+
+export function beginVkApiUsage({ timestamp, operation, method, tokenType }) {
+  return db.prepare(`INSERT INTO vk_api_usage
+    (timestamp, operation, method, token_type, success, vk_error_code, error_kind)
+    VALUES (?, ?, ?, ?, -1, NULL, 'in_flight')`).run(timestamp, operation, method, tokenType).lastInsertRowid;
+}
+
+export function finishVkApiUsage(id, { success, vkErrorCode = null, errorKind = null }) {
+  db.prepare('UPDATE vk_api_usage SET success = ?, vk_error_code = ?, error_kind = ? WHERE id = ?')
+    .run(success ? 1 : 0, vkErrorCode, errorKind, id);
+}
+
+export function registerPollingPost(post) {
+  const auction = getOrCreateAuction(config.vkGroupId, post.id,
+    post.date ? new Date(post.date * 1000).toISOString() : null, null);
+  db.prepare(`INSERT INTO auction_poll_state (auction_id, post_json) VALUES (?, ?)
+    ON CONFLICT(auction_id) DO UPDATE SET post_json = excluded.post_json`)
+    .run(auction.id, JSON.stringify(post));
+  return auction;
+}
+
+export function getAuctionPollState(auctionId) {
+  return db.prepare('SELECT * FROM auction_poll_state WHERE auction_id = ?').get(auctionId);
+}
+
+export function getPollingAuctions() {
+  return db.prepare(`SELECT a.*, p.status AS poll_status, p.post_json, p.next_poll_at,
+    p.last_successful_poll, p.consecutive_failures, p.last_comment_id
+    FROM auctions a JOIN auction_poll_state p ON p.auction_id = a.id
+    WHERE a.group_id = ? ORDER BY a.post_date, a.post_id`).all(config.vkGroupId);
+}
+
+export function getAuctionsMissingPollState() {
+  return db.prepare(`SELECT a.* FROM auctions a
+    LEFT JOIN auction_poll_state p ON p.auction_id = a.id
+    WHERE a.group_id = ? AND p.auction_id IS NULL`).all(config.vkGroupId);
+}
+
+export function saveSuccessfulPoll({ auctionId, lastCommentId, lastCommentDate, startedAt }) {
+  db.prepare(`UPDATE auction_poll_state SET last_comment_id = MAX(last_comment_id, ?),
+    last_comment_date = COALESCE(?, last_comment_date), last_successful_poll = ?,
+    consecutive_failures = 0, last_error_code = NULL WHERE auction_id = ?`)
+    .run(lastCommentId, lastCommentDate ?? null, startedAt, auctionId);
+}
+
+export function savePollSchedule({ auctionId, status, nextPollAt }) {
+  db.prepare('UPDATE auction_poll_state SET status = ?, next_poll_at = ? WHERE auction_id = ?')
+    .run(status, nextPollAt, auctionId);
+}
+
+export function savePollFailure({ auctionId, nextPollAt, errorCode }) {
+  db.prepare(`UPDATE auction_poll_state SET consecutive_failures = consecutive_failures + 1,
+    last_error_code = ?, next_poll_at = ? WHERE auction_id = ?`)
+    .run(String(errorCode ?? 'unknown'), nextPollAt, auctionId);
+}
+
+export function saveReminderPackage({ auctionId, scheduleTime, payload, publisher, status, reason }) {
+  db.prepare(`INSERT INTO reminder_packages
+    (auction_id, schedule_time, payload_json, publisher, status, reason) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(auction_id, schedule_time) DO NOTHING`)
+    .run(auctionId, scheduleTime, JSON.stringify(payload), publisher, status, reason ?? null);
+}
+
+export function getReminderPackage(auctionId, scheduleTime) {
+  return db.prepare('SELECT * FROM reminder_packages WHERE auction_id = ? AND schedule_time = ?')
+    .get(auctionId, scheduleTime);
+}
+
+export function expireReminderPackages(auctionId) {
+  db.prepare(`UPDATE reminder_packages SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+    WHERE auction_id = ? AND status = 'pending'`).run(auctionId);
 }
 

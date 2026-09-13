@@ -30,8 +30,7 @@ import {
   getUserInfo,
   createComment,
   deleteComment,
-  getVkBackoffUntil,
-  isTemporaryVkError
+  getVkBackoffUntil
 } from './vk.js';
 
 const userInfoCache = new Map();
@@ -45,10 +44,6 @@ function resolveUserName(comment, userMap) {
   const user = userMap.get(comment.from_id);
   if (!user) return `id${comment.from_id}`;
   return `${user.first_name} ${user.last_name}`.trim();
-}
-
-function isVkFloodControlError(error) {
-  return isTemporaryVkError(error) || /"error_code"\s*:\s*9/.test(String(error?.message || ''));
 }
 
 async function getCachedUserInfo(userIds) {
@@ -66,22 +61,19 @@ async function getCachedUserInfo(userIds) {
   }
 
   if (missingUserIds.length && Date.now() >= getVkBackoffUntil()) {
-    try {
-      const users = await getUserInfo(missingUserIds);
-
-      for (const user of users) {
-        userInfoCache.set(user.id, user);
+    for (let offset = 0; offset < missingUserIds.length; offset += 1000) {
+      try {
+        const users = await getUserInfo(missingUserIds.slice(offset, offset + 1000));
+        saveCachedVkUsers(users);
+        for (const user of users) {
+          userInfoCache.set(user.id, user);
+        }
+      } catch (error) {
+        logger.warn(
+          `VK users.get unavailable; using cached names and id fallback. ${error.message}`
+        );
+        break;
       }
-
-      saveCachedVkUsers(users);
-    } catch (error) {
-      if (!isVkFloodControlError(error)) {
-        throw error;
-      }
-
-      logger.warn(
-        'VK users.get temporary failure; using cached names and id fallback for unknown users.'
-      );
     }
   }
 
@@ -365,7 +357,8 @@ export async function publishOrRefreshSummary(postId, auctionId, { isSingleAucti
     const result = await createComment({
       groupId: config.vkGroupId,
       postId,
-      message: summaryText
+      message: summaryText,
+      operation: 'summary_publish'
     });
 
     newCommentId = result.comment_id ?? null;
@@ -742,8 +735,8 @@ export function printCurrentSummary(postId, postDate = null, { isSingleAuction =
 }
 
 // Временно выключено, пока не будет полностью добита логика завершения по времени
-export async function finalizeExpiredLots({ singleAuctionPostIds = new Set() } = {}) {
-  const nowIso = new Date().toISOString();
+export async function finalizeExpiredLots({ singleAuctionPostIds = new Set(), eligiblePostIds = null, now = new Date() } = {}) {
+  const nowIso = now.toISOString();
   const expiredLots = getExpiredOpenLots(nowIso);
 
   if (!expiredLots.length) {
@@ -751,6 +744,7 @@ export async function finalizeExpiredLots({ singleAuctionPostIds = new Set() } =
   }
 
   for (const lot of expiredLots) {
+    if (eligiblePostIds && !eligiblePostIds.has(lot.post_id)) continue;
     if (singleAuctionPostIds.has(lot.post_id) && lot.lot_number !== 1) {
       logger.info(
         `Skip finalize for single-auction post ${lot.post_id}, lot ${lot.lot_number}: only lot 1 is visible`

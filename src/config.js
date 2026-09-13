@@ -14,26 +14,28 @@ function resolveConfigPath(value) {
   return isAbsolute(value) ? value : resolve(appRoot, value);
 }
 
-function required(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
-
 export const config = {
-  vkUserToken: required('VK_USER_TOKEN'),
-  vkGroupToken: required('VK_GROUP_TOKEN'),
+  vkServiceToken: process.env.VK_SERVICE_TOKEN || '',
+  vkGroupToken: process.env.VK_GROUP_TOKEN || '',
   vkApiVersion: process.env.VK_API_VERSION || '5.199',
-  vkGroupId: Number(required('VK_GROUP_ID')),
+  vkGroupId: Number(process.env.VK_GROUP_ID || 0),
+  vkTimeoutMs: Number(process.env.VK_TIMEOUT_MS || 15000),
+  vkRequestSpacingMs: Number(process.env.VK_REQUEST_SPACING_MS || 400),
+  vkBackoffBaseMs: Number(process.env.VK_BACKOFF_BASE_MS || 15000),
+  vkBackoffMaxMs: Number(process.env.VK_BACKOFF_MAX_MS || 300000),
 
-  pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 15000),
-  pollFastIntervalMs: Number(process.env.POLL_FAST_INTERVAL_MS || process.env.POLL_INTERVAL_MS || 15000),
-  pollNormalIntervalMs: Number(process.env.POLL_NORMAL_INTERVAL_MS || 60000),
-  pollNightIntervalMs: Number(process.env.POLL_NIGHT_INTERVAL_MS || 300000),
-  pollFastAfterPostMs: Number(process.env.POLL_FAST_AFTER_POST_MS || 2 * 60 * 60 * 1000),
-  pollClosingSoonMs: Number(process.env.POLL_CLOSING_SOON_MS || 30 * 60 * 1000),
+  pollQuietMs: Number(process.env.POLL_QUIET_MS || 3600000),
+  pollActiveMs: Number(process.env.POLL_ACTIVE_MS || 600000),
+  pollApproachingMs: Number(process.env.POLL_APPROACHING_MS || 120000),
+  pollClosingMs: Number(process.env.POLL_CLOSING_MS || 60000),
+  pollDeadlineMs: Number(process.env.POLL_DEADLINE_MS || 15000),
+  pollGraceMs: Number(process.env.POLL_GRACE_MS || 300000),
+  pollGraceWindowMs: Number(process.env.POLL_GRACE_WINDOW_MS || 1800000),
+  pollActiveWindowMs: Number(process.env.POLL_ACTIVE_WINDOW_MS || 43200000),
+  pollApproachingWindowMs: Number(process.env.POLL_APPROACHING_WINDOW_MS || 7200000),
+  pollClosingWindowMs: Number(process.env.POLL_CLOSING_WINDOW_MS || 1800000),
+  pollDeadlineWindowMs: Number(process.env.POLL_DEADLINE_WINDOW_MS || 300000),
+  auctionDiscoveryMs: Number(process.env.AUCTION_DISCOVERY_MS || 1800000),
   autoReply: String(process.env.AUTO_REPLY || 'false') === 'true',
   useLmStudio: String(process.env.USE_LM_STUDIO || 'false') === 'true',
   lmStudioBaseUrl: process.env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234/v1',
@@ -53,6 +55,7 @@ export const config = {
   replyDelayMs: Number(process.env.REPLY_DELAY_MS || 700),
   rebuildMode: String(process.env.REBUILD_MODE || 'false') === 'true',
   auctionRemindersEnabled: String(process.env.AUCTION_REMINDERS_ENABLED || 'true') === 'true',
+  reminderPublisher: process.env.REMINDER_PUBLISHER || 'group-token',
   happySantaApiBaseUrl: process.env.HS_API_BASE_URL || 'https://broadcast.vkforms.ru/api/v2',
   happySantaApiToken: process.env.HS_API_TOKEN || '',
   happySantaAuctionListId: Number(process.env.HS_AUCTION_LIST_ID || 0),

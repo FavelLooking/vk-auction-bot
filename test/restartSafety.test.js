@@ -8,7 +8,7 @@ const testDir = join(tmpdir(), `vk-auction-bot-restart-safety-${process.pid}`);
 rmSync(testDir, { recursive: true, force: true });
 
 process.env.SQLITE_PATH = join(testDir, 'auction.db');
-process.env.VK_USER_TOKEN = 'test';
+process.env.VK_SERVICE_TOKEN = 'test';
 process.env.VK_GROUP_TOKEN = 'test';
 process.env.VK_GROUP_ID = '57561517';
 process.env.AUTO_REPLY = 'false';
