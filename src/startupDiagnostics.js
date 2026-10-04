@@ -61,7 +61,7 @@ function getNextMoscowRun(hour, minute, now = new Date()) {
 function getConfigWarnings() {
   const warnings = [];
 
-  if (Object.keys(process.env).some((name) => /^POLL_(INTERVAL_MS|FAST_|NORMAL_|NIGHT_|CLOSING_SOON_MS)/.test(name))) {
+  if (Object.keys(process.env).some((name) => /^POLL_(INTERVAL_MS|FAST_|NORMAL_|NIGHT_|CLOSING_SOON_MS|ACTIVE_WINDOW_MS)/.test(name))) {
     warnings.push('Legacy polling variables are ignored; configure the new POLL_*_MS settings documented in README.md');
   }
 
@@ -103,7 +103,8 @@ export function logStartupDiagnostics() {
   logger.info('');
   logger.info('Polling: enabled');
   logger.info('VK reads: service token; comments: group token');
-  logger.info(`Polling intervals (s): quiet=${config.pollQuietMs / 1000}, active=${config.pollActiveMs / 1000}, approaching=${config.pollApproachingMs / 1000}, closing=${config.pollClosingMs / 1000}, deadline=${config.pollDeadlineMs / 1000}, grace=${config.pollGraceMs / 1000}`);
+  logger.info(`Polling intervals (s): initial=${config.pollInitialMs / 1000}, quiet=${config.pollQuietMs / 1000}, day=${config.pollDayMs / 1000}, active=${config.pollActiveMs / 1000}, approaching=${config.pollApproachingMs / 1000}, closing=${config.pollClosingMs / 1000}, deadline=${config.pollDeadlineMs / 1000}, grace=${config.pollGraceMs / 1000}`);
+  logger.info(`Auction discovery: ${config.auctionDiscoveryStart}-${config.auctionDiscoveryEnd} Europe/Moscow every ${config.auctionDiscoveryMs / 60000}m until today's auction is found`);
   logger.info(`Auto Reply: ${config.autoReply ? 'enabled' : 'disabled'}`);
   logger.info(`Reminder Scheduler: ${config.auctionRemindersEnabled ? 'enabled' : 'disabled'}`);
   logger.info(`Reminder publisher: ${reminderMode}${config.dryRun ? ' (DRY_RUN)' : ''}`);

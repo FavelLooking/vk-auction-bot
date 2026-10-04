@@ -82,6 +82,7 @@ function parseMultiLotSamePrice(line) {
 function parseSingleLot(line) {
   const patterns = [
     new RegExp(`^(\\d+)\\s*-\\s*(\\d+)${TAIL}`),
+    new RegExp(`^(\\d+)\\s*\\.\\s*(\\d+)${TAIL}`),
     new RegExp(`^(\\d+)\\s+(\\d+)${TAIL}`),
     new RegExp(`^лот\\s*(\\d+)\\s*-\\s*(\\d+)${TAIL}`, 'i'),
     new RegExp(`^лот\\s*(\\d+)\\s+(\\d+)${TAIL}`, 'i')

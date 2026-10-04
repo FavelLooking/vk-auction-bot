@@ -580,7 +580,8 @@ export async function processAuctionComments({
           userName,
           amount: bid.amount,
           status: decision.accepted ? 'accepted' : 'rejected',
-          reason: decision.reason
+          reason: decision.reason,
+          commentAt: commentDateIso
         });
 
         if (decision.accepted) {

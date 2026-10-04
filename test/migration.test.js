@@ -176,7 +176,7 @@ try {
   await check('poll windows follow actual end and per-lot extension deadlines', async () => {
     const input = { postDate: '2026-09-12T07:00:00.000Z' };
     for (const [time, interval] of [
-      ['00:00', 3600000], ['08:00', 600000], ['17:59', 600000], ['18:00', 120000],
+      ['00:00', 3600000], ['08:00', 1800000], ['17:59', 600000], ['18:00', 120000],
       ['19:30', 60000], ['19:55', 15000], ['20:00', 300000]
     ]) {
       assert.equal(getPollingPlan(input, new Date(`2026-09-13T${time}:00+03:00`)).intervalMs, interval);
@@ -204,6 +204,8 @@ try {
     }), false);
     assert.equal(store.getAuctionPollState(auction.id).last_comment_id, 0);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bids WHERE auction_id = ?').get(auction.id).n, 3);
+    assert.equal(db.prepare('SELECT comment_at FROM bids WHERE auction_id = ? ORDER BY id LIMIT 1').get(auction.id).comment_at,
+      '2026-09-13T09:00:00.000Z');
     assert.equal(await pollAuction(value, { now, readComments: commentsPage(items) }), true);
     assert.equal(store.getAuctionPollState(auction.id).last_comment_id, 5003);
     assert.equal(store.getLotState(auction.id, 1).current_price, 200);
@@ -277,10 +279,15 @@ try {
     const { value, auction } = seedAuction(8004);
     respond = async (method) => method === 'wall.get'
       ? { error: { error_code: 9 } } : { response: { items: [] } };
+    const discoveryCallsBefore = requests.filter((request) => request.method === 'wall.get').length;
     await tick(new Date('2026-09-13T12:00:00+03:00'));
     assert.ok(store.getAuctionPollState(auction.id).last_successful_poll);
     assert.ok(store.getWorkerState('auction_discovery').failures);
     assert.equal(JSON.parse(store.getAuctionPollState(auction.id).post_json).id, value.id);
+    const discoveryCallsAfterStartup = requests.filter((request) => request.method === 'wall.get').length;
+    assert.equal(discoveryCallsAfterStartup, discoveryCallsBefore + 1);
+    await tick(new Date('2026-09-13T12:05:00+03:00'));
+    assert.equal(requests.filter((request) => request.method === 'wall.get').length, discoveryCallsAfterStartup);
   });
 
   await check('legacy SQLite auction missing from recent wall is recovered with the same discovery filter', async () => {
@@ -404,8 +411,8 @@ try {
       if (plan.status === 'stopped') break;
       time = new Date(Math.min(time.getTime() + plan.intervalMs, plan.nextBoundary ?? Infinity));
     }
-    assert.equal(count, 165);
-    console.log(`Modeled ending-auction polls/day: ${count}; with 48 discovery calls, 3 reminder lookups, 4 new-auction polls: ${count + 55}. Excludes users, writes, pagination, failures and restarts.`);
+    assert.equal(count, 129);
+    console.log(`Modeled ending-auction polls/day: ${count}; plus at most 14 discovery slots, 3 reminder lookups and about 36 polls for a new 18:00 auction: up to ${count + 53}. Excludes users, writes, pagination, failures and restarts.`);
   });
 
   assert.equal(requests.filter((request) => request.method === 'wall.post').length, 0);

@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import { logger } from './logger.js';
-import { getFailureBackoffMs } from './vk.js';
 import { getAuctionPosts } from './auctionPosts.js';
+import { getDiscoveryPlan, hasKnownAuctionForDate, isPostFromMoscowDate } from './auctionDiscovery.js';
 import {
   getMoscowDateParts,
   getMoscowDateKey
@@ -24,6 +24,54 @@ let isRunning = false;
 let isReminderRunning = false;
 let lastReminderRunKey = null;
 let firstPoll = true;
+let startupDiscoveryPending = true;
+
+async function runDiscovery(now) {
+  const discovery = getWorkerState('auction_discovery') || { nextAt: 0, failures: 0 };
+  const knownAuctions = getPollingAuctions();
+  const dateKey = getMoscowDateKey(now);
+  const startup = startupDiscoveryPending;
+  startupDiscoveryPending = false;
+  const knownToday = hasKnownAuctionForDate(knownAuctions, dateKey);
+  const plan = getDiscoveryPlan(now, discovery, { startup, todayDiscovered: knownToday });
+
+  if (!plan.due) {
+    if (discovery.nextAt !== plan.nextAt || (knownToday && discovery.discoveredDateKey !== dateKey)) {
+      saveWorkerState('auction_discovery', {
+        ...discovery,
+        nextAt: plan.nextAt,
+        ...(knownToday ? { discoveredDateKey: dateKey } : {})
+      });
+    }
+    return;
+  }
+
+  try {
+    const recoverPostIds = getAuctionsMissingPollState().map((auction) => auction.post_id);
+    const discovered = await getAuctionPosts({ recoverPostIds });
+    for (const post of discovered) registerPollingPost(post);
+    const discoveredToday = knownToday || discovered.some((post) => isPostFromMoscowDate(post, dateKey));
+    const settledPlan = discoveredToday
+      ? getDiscoveryPlan(now, { ...discovery, discoveredDateKey: dateKey }, { todayDiscovered: true })
+      : plan;
+    saveWorkerState('auction_discovery', {
+      nextAt: settledPlan.nextAt,
+      failures: 0,
+      lastSuccess: now.toISOString(),
+      lastAttemptedSlot: plan.slotKey,
+      ...(discoveredToday ? { discoveredDateKey: dateKey } : {})
+    });
+    logger.info(`Auction discovery (${plan.reason}): ${discovered.length} post(s); next=${new Date(settledPlan.nextAt).toISOString()}`);
+  } catch (error) {
+    saveWorkerState('auction_discovery', {
+      ...discovery,
+      failures: discovery.failures + 1,
+      nextAt: plan.nextAt,
+      lastAttemptedSlot: plan.slotKey
+    });
+    logger.warn(`Auction discovery deferred until the next scheduled slot; continuing saved auctions: ${error.message}`);
+  }
+}
 
 export async function tick(now = new Date()) {
   if (isRunning) {
@@ -35,24 +83,7 @@ export async function tick(now = new Date()) {
   let auctionPosts = [];
 
   try {
-    const discovery = getWorkerState('auction_discovery') || { nextAt: 0, failures: 0 };
-    if (now.getTime() >= discovery.nextAt) {
-      try {
-        const recoverPostIds = getAuctionsMissingPollState().map((auction) => auction.post_id);
-        const discovered = await getAuctionPosts({ recoverPostIds });
-        for (const post of discovered) registerPollingPost(post);
-        saveWorkerState('auction_discovery', {
-          nextAt: now.getTime() + config.auctionDiscoveryMs, failures: 0, lastSuccess: now.toISOString()
-        });
-        logger.info(`Auction discovery: ${discovered.length} post(s); next in ${config.auctionDiscoveryMs / 1000}s`);
-      } catch (error) {
-        saveWorkerState('auction_discovery', {
-          ...discovery, failures: discovery.failures + 1,
-          nextAt: Math.max(now.getTime() + getFailureBackoffMs(discovery.failures + 1), error.retryAt || 0)
-        });
-        logger.warn('Auction discovery deferred; continuing saved auctions:', error.message);
-      }
-    }
+    await runDiscovery(now);
     const auctions = getPollingAuctions();
     auctionPosts = auctions.map((auction) => JSON.parse(auction.post_json));
     const reconciledPosts = [];

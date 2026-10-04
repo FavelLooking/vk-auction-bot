@@ -106,6 +106,10 @@ function getSchemaMigrationReason() {
     return 'auction_reminders table requires migration';
   }
 
+  if (!getTableColumns('bids').includes('comment_at')) {
+    return 'bids.comment_at column is missing';
+  }
+
   return null;
 }
 
@@ -155,6 +159,7 @@ CREATE TABLE IF NOT EXISTS auctions (
     amount INTEGER NOT NULL,
     status TEXT NOT NULL,
     reason TEXT,
+    comment_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (auction_id) REFERENCES auctions(id)
   );
@@ -301,6 +306,10 @@ function migrateAuctionRemindersTable() {
 
 migrateAuctionRemindersTable();
 
+if (!getTableColumns('bids').includes('comment_at')) {
+  db.exec('ALTER TABLE bids ADD COLUMN comment_at TEXT');
+}
+
 export function getAuctionSummaryRecord(auctionId) {
   return db
     .prepare(`SELECT * FROM auction_summaries WHERE auction_id = ?`)
@@ -402,12 +411,13 @@ export function saveBid({
   userName,
   amount,
   status,
-  reason
+  reason,
+  commentAt
 }) {
   const result = db.prepare(`
     INSERT INTO bids (
-      auction_id, comment_id, lot_number, user_id, user_name, amount, status, reason
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      auction_id, comment_id, lot_number, user_id, user_name, amount, status, reason, comment_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     auctionId,
     commentId,
@@ -416,7 +426,8 @@ export function saveBid({
     userName ?? null,
     amount,
     status,
-    reason ?? null
+    reason ?? null,
+    commentAt ?? null
   );
 
   return db.prepare(`SELECT * FROM bids WHERE id = ?`).get(result.lastInsertRowid);

@@ -8,7 +8,7 @@ and sends a Happy Santa broadcast reminder.
 
 - Node.js: tested with Node.js `v24.14.1`
 - Database: SQLite via `better-sqlite3`
-- Process manager for production: PM2
+- Production process manager: existing systemd service `vk-auction-bot`
 
 ## Installation
 
@@ -23,7 +23,7 @@ Create a local `.env` file on the target machine. Do not commit `.env`.
 Required:
 
 ```env
-VK_USER_TOKEN=
+VK_SERVICE_TOKEN=
 VK_GROUP_TOKEN=
 VK_GROUP_ID=
 SQLITE_PATH=
@@ -41,12 +41,22 @@ TZ=Europe/Moscow
 SQLITE_BACKUP_DIR=
 HS_API_BASE_URL=https://broadcast.vkforms.ru/api/v2
 HS_TIMEOUT_MS=10000
-POLL_INTERVAL_MS=15000
-POLL_FAST_INTERVAL_MS=15000
-POLL_NORMAL_INTERVAL_MS=60000
-POLL_NIGHT_INTERVAL_MS=300000
-POLL_FAST_AFTER_POST_MS=7200000
-POLL_CLOSING_SOON_MS=1800000
+POLL_INITIAL_MS=600000
+POLL_INITIAL_WINDOW_MS=10800000
+POLL_QUIET_MS=3600000
+POLL_DAY_MS=1800000
+POLL_ACTIVE_MS=600000
+POLL_APPROACHING_MS=120000
+POLL_CLOSING_MS=60000
+POLL_DEADLINE_MS=15000
+POLL_APPROACHING_WINDOW_MS=7200000
+POLL_CLOSING_WINDOW_MS=1800000
+POLL_DEADLINE_WINDOW_MS=300000
+POLL_GRACE_MS=300000
+POLL_GRACE_WINDOW_MS=1800000
+AUCTION_DISCOVERY_START=18:01
+AUCTION_DISCOVERY_END=20:11
+AUCTION_DISCOVERY_MS=600000
 MIN_BID_STEP=50
 ALLOW_EQUAL_BID=false
 AUCTION_POST_SEARCH_LIMIT=15
@@ -88,15 +98,15 @@ npm run hs:test -- --force
 
 `--force` bypasses Happy Santa duplicate protection and should be used carefully.
 
-## Production With PM2
+## Production Service
 
 Run only one bot instance at a time.
 
-```bash
-pm2 start npm --name vk-auction-bot -- run start
-pm2 save
-pm2 startup
-```
+Production is managed by the existing systemd service `vk-auction-bot`. Its unit
+file is managed on the VPS and is not stored in this repository. Verify the
+unit's current `WorkingDirectory`, `ExecStart`, environment source and user on
+the VPS before an approved deployment; do not replace it with PM2 based on this
+README.
 
 Recommended VPS layout:
 
@@ -121,9 +131,9 @@ configured SQLite database file.
 Useful checks:
 
 ```bash
-pm2 status
-pm2 logs vk-auction-bot
-pm2 restart vk-auction-bot
+sudo systemctl cat vk-auction-bot
+sudo systemctl status vk-auction-bot
+journalctl -u vk-auction-bot -n 100 --no-pager
 ```
 
 ## Scheduled Automation
@@ -139,6 +149,21 @@ The scheduler runs inside the long-lived Node.js process:
 
 No cron or Windows Task Scheduler is required for these jobs as long as the Node.js
 process is alive.
+
+Auction discovery runs at `18:01, 18:11, ... 20:11 Europe/Moscow` and stops for
+the rest of the Moscow calendar day as soon as today's auction is found. Process
+startup performs one recovery discovery regardless of the current time.
+
+Bid polling uses the current effective end, including anti-sniper extensions:
+
+- first 3 hours after publication: every 10 minutes;
+- after that and before 08:00: every 60 minutes;
+- 08:00-17:00: every 30 minutes;
+- after 17:00 until T-2h: every 10 minutes;
+- T-2h: every 2 minutes;
+- T-30m: every minute;
+- T-5m: every 15 seconds;
+- after the effective deadline: reconciliation every 5 minutes for at most 30 minutes.
 
 ## Happy Santa Integration
 

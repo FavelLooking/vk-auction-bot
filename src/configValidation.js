@@ -46,14 +46,22 @@ export function validateRequiredConfig(env = process.env) {
   }
   for (const name of [
     'VK_TIMEOUT_MS', 'VK_REQUEST_SPACING_MS', 'VK_BACKOFF_BASE_MS', 'VK_BACKOFF_MAX_MS',
-    'POLL_QUIET_MS', 'POLL_ACTIVE_MS', 'POLL_APPROACHING_MS', 'POLL_CLOSING_MS',
-    'POLL_DEADLINE_MS', 'POLL_GRACE_MS', 'POLL_GRACE_WINDOW_MS', 'POLL_ACTIVE_WINDOW_MS',
+    'POLL_INITIAL_MS', 'POLL_INITIAL_WINDOW_MS', 'POLL_QUIET_MS', 'POLL_DAY_MS',
+    'POLL_ACTIVE_MS', 'POLL_APPROACHING_MS', 'POLL_CLOSING_MS',
+    'POLL_DEADLINE_MS', 'POLL_GRACE_MS', 'POLL_GRACE_WINDOW_MS',
     'POLL_APPROACHING_WINDOW_MS', 'POLL_CLOSING_WINDOW_MS', 'POLL_DEADLINE_WINDOW_MS',
     'AUCTION_DISCOVERY_MS'
   ]) {
     if (env[name] !== undefined && (!Number.isSafeInteger(Number(env[name])) || Number(env[name]) <= 0)) {
       invalid.push(name);
     }
+  }
+  for (const name of ['AUCTION_DISCOVERY_START', 'AUCTION_DISCOVERY_END']) {
+    if (env[name] !== undefined && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(env[name])) invalid.push(name);
+  }
+  if (env.AUCTION_DISCOVERY_START && env.AUCTION_DISCOVERY_END
+    && env.AUCTION_DISCOVERY_START >= env.AUCTION_DISCOVERY_END) {
+    invalid.push('AUCTION_DISCOVERY_START/AUCTION_DISCOVERY_END');
   }
   if (env.REMINDER_PUBLISHER && !['group-token', 'package-only', 'disabled'].includes(env.REMINDER_PUBLISHER)) {
     invalid.push('REMINDER_PUBLISHER (use group-token, package-only or disabled)');

@@ -35,6 +35,16 @@ export function getMoscowDateKey(value) {
   ].join('-');
 }
 
+export function shiftDateKey(dateKey, days) {
+  const date = new Date(`${dateKey}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function getMoscowTime(dateKey, hour, minute = 0) {
+  return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+03:00`);
+}
+
 export function getAuctionBaseEndIso(postDateIso) {
   if (!postDateIso) return null;
 

@@ -1,5 +1,5 @@
 import { config } from './config.js';
-import { getAuctionBaseEndIso } from './auctionTime.js';
+import { getAuctionBaseEndIso, getMoscowDateKey, getMoscowDateParts, getMoscowTime, shiftDateKey } from './auctionTime.js';
 import { isSingleAuctionPost } from './auctionPosts.js';
 import { filterSingleAuctionSummaryRows } from './singleAuctionParser.js';
 import { getWallComments, getFailureBackoffMs, VkApiError } from './vk.js';
@@ -62,17 +62,51 @@ export function getPollingPlan({ postDate, summaryRows = [], lastSuccessfulPoll 
   }
   const nextEnd = openRows.length ? Math.min(...openRows.map(lotEnd)) : baseEnd;
   const remaining = nextEnd - nowMs;
-  const phases = [
+  const deadlinePhases = [
     [settings.pollDeadlineWindowMs, settings.pollDeadlineMs, 'deadline / extension'],
     [settings.pollClosingWindowMs, settings.pollClosingMs, 'closing soon'],
-    [settings.pollApproachingWindowMs, settings.pollApproachingMs, 'approaching end'],
-    [settings.pollActiveWindowMs, settings.pollActiveMs, 'active period']
+    [settings.pollApproachingWindowMs, settings.pollApproachingMs, 'approaching end']
   ];
-  const phase = phases.find(([window]) => remaining <= window);
-  const boundaries = phases.map(([window]) => nextEnd - window).filter((time) => time > nowMs);
+  const deadlinePhase = deadlinePhases.find(([window]) => remaining <= window);
+  const boundaries = deadlinePhases.map(([window]) => nextEnd - window).filter((time) => time > nowMs);
+
+  let intervalMs;
+  let reason;
+  if (deadlinePhase) {
+    [, intervalMs, reason] = deadlinePhase;
+  } else {
+    const postPublishedAt = Date.parse(postDate);
+    const initialEndsAt = postPublishedAt + settings.pollInitialWindowMs;
+    if (Number.isFinite(postPublishedAt) && nowMs >= postPublishedAt && nowMs < initialEndsAt) {
+      intervalMs = settings.pollInitialMs;
+      reason = 'first 3 hours';
+      boundaries.push(initialEndsAt);
+    } else {
+      const parts = getMoscowDateParts(now);
+      const dateKey = getMoscowDateKey(now);
+      if (parts.hour < 8) {
+        intervalMs = settings.pollQuietMs;
+        reason = 'quiet before 08:00';
+        boundaries.push(getMoscowTime(dateKey, 8).getTime());
+      } else if (parts.hour < 17) {
+        intervalMs = settings.pollDayMs;
+        reason = 'day 08:00-17:00';
+        boundaries.push(getMoscowTime(dateKey, 17).getTime());
+      } else if (getMoscowDateKey(new Date(nextEnd)) !== dateKey) {
+        intervalMs = settings.pollQuietMs;
+        reason = 'quiet before closing day';
+        boundaries.push(getMoscowTime(shiftDateKey(dateKey, 1), 8).getTime());
+      } else {
+        intervalMs = settings.pollActiveMs;
+        reason = 'active after 17:00';
+        boundaries.push(getMoscowTime(shiftDateKey(dateKey, 1), 0).getTime());
+      }
+    }
+  }
+
   return {
-    intervalMs: phase?.[1] ?? settings.pollQuietMs,
-    reason: phase?.[2] ?? 'quiet period', status: 'active',
+    intervalMs,
+    reason, status: 'active',
     nextBoundary: boundaries.length ? Math.min(...boundaries) : null
   };
 }

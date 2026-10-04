@@ -6,6 +6,23 @@ import {
   parseSingleAuctionBidAmount
 } from '../src/singleAuctionParser.js';
 
+const parserCases = [
+  ['1.100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1 . 100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1.100\n2.100', [
+    { lot: 1, amount: 100, confidence: 'single' },
+    { lot: 2, amount: 100, confidence: 'single' }
+  ]],
+  ['1-100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1 - 100', [{ lot: 1, amount: 100, confidence: 'single' }]]
+];
+
+for (const [text, bids] of parserCases) {
+  const result = parseCommentText(text);
+  assert.equal(result.status, 'valid', `${text} should be valid`);
+  assert.deepEqual(result.bids, bids);
+}
+
 const accepted = [
   ['50', 50],
   ['стартану 50 рублей', 50],
