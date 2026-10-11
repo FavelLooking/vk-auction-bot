@@ -14,13 +14,90 @@ const parserCases = [
     { lot: 2, amount: 100, confidence: 'single' }
   ]],
   ['1-100', [{ lot: 1, amount: 100, confidence: 'single' }]],
-  ['1 - 100', [{ lot: 1, amount: 100, confidence: 'single' }]]
+  ['1 - 100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1 100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['лот 1-100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['лот 1 100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1:100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1—100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1\u00a0-\u00a0100', [{ lot: 1, amount: 100, confidence: 'single' }]],
+  ['1-3-200', [
+    { lot: 1, amount: 200, confidence: 'range' },
+    { lot: 2, amount: 200, confidence: 'range' },
+    { lot: 3, amount: 200, confidence: 'range' }
+  ]],
+  ['1,3-200', [
+    { lot: 1, amount: 200, confidence: 'multi' },
+    { lot: 3, amount: 200, confidence: 'multi' }
+  ]],
+  ['1, 3, 4 - 200', [
+    { lot: 1, amount: 200, confidence: 'multi' },
+    { lot: 3, amount: 200, confidence: 'multi' },
+    { lot: 4, amount: 200, confidence: 'multi' }
+  ]],
+  ['1,2,3,4,5,6 - 500р', [
+    { lot: 1, amount: 500, confidence: 'multi' },
+    { lot: 2, amount: 500, confidence: 'multi' },
+    { lot: 3, amount: 500, confidence: 'multi' },
+    { lot: 4, amount: 500, confidence: 'multi' },
+    { lot: 5, amount: 500, confidence: 'multi' },
+    { lot: 6, amount: 500, confidence: 'multi' }
+  ]],
+  ['2-400, 3-400', [
+    { lot: 2, amount: 400, confidence: 'single' },
+    { lot: 3, amount: 400, confidence: 'single' }
+  ]],
+  ['2-400; 4-400', [
+    { lot: 2, amount: 400, confidence: 'single' },
+    { lot: 4, amount: 400, confidence: 'single' }
+  ]],
+  ['1,4-200; 2-300', [
+    { lot: 1, amount: 200, confidence: 'multi' },
+    { lot: 2, amount: 300, confidence: 'single' },
+    { lot: 4, amount: 200, confidence: 'multi' }
+  ]],
+  ['1-200, 2,4-300', [
+    { lot: 1, amount: 200, confidence: 'single' },
+    { lot: 2, amount: 300, confidence: 'multi' },
+    { lot: 4, amount: 300, confidence: 'multi' }
+  ]],
+  ['2-400, 2-400', [{ lot: 2, amount: 400, confidence: 'single' }]],
+  ['2-400, спасибо', [{ lot: 2, amount: 400, confidence: 'single' }]],
+  ['2-400; удачи', [{ lot: 2, amount: 400, confidence: 'single' }]],
+  ['2-400 ставка', [{ lot: 2, amount: 400, confidence: 'single' }]]
 ];
 
 for (const [text, bids] of parserCases) {
   const result = parseCommentText(text);
   assert.equal(result.status, 'valid', `${text} should be valid`);
   assert.deepEqual(result.bids, bids);
+}
+
+const partialParserCases = [
+  ['2-400, 3-abc', [{ lot: 2, amount: 400, confidence: 'single' }], ['3-abc']],
+  ['2-400; лот 3', [{ lot: 2, amount: 400, confidence: 'single' }], ['лот 3']],
+  ['2-400 3-500', [{ lot: 2, amount: 400, confidence: 'single' }], ['3-500']],
+  ['2-400 и 3-500', [{ lot: 2, amount: 400, confidence: 'single' }], ['и 3-500']],
+  ['2-400. 3-500', [{ lot: 2, amount: 400, confidence: 'single' }], ['3-500']],
+  ['2-400, 3-400, 4-x', [
+    { lot: 2, amount: 400, confidence: 'single' },
+    { lot: 3, amount: 400, confidence: 'single' }
+  ], ['4-x']]
+];
+
+for (const [text, bids, failedLines] of partialParserCases) {
+  const result = parseCommentText(text);
+  assert.equal(result.status, 'partial', `${text} should be partial`);
+  assert.deepEqual(result.bids, bids);
+  assert.deepEqual(result.failedLines, failedLines);
+  assert.equal(result.reason, 'some_lines_unparsed');
+}
+
+for (const text of ['ставка', '3-abc', 'лот 3']) {
+  const result = parseCommentText(text);
+  assert.equal(result.status, 'invalid', `${text} should be invalid`);
+  assert.deepEqual(result.bids, []);
+  assert.deepEqual(result.failedLines, [text]);
 }
 
 const accepted = [
